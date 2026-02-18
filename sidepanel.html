@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    /* GRUNDLAYOUT & RESET */
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      padding: 12px;
+      width: 100%; 
+      box-sizing: border-box; 
+      background: #f8f9fa;
+      color: #333;
+      margin: 0;
+      overflow-x: hidden;
+    }
+
+    h2 {
+      font-size: 16px;
+      margin-top: 0;
+      color: #2c3e50;
+      border-bottom: 2px solid #e9ecef;
+      padding-bottom: 8px;
+    }
+
+    /* VIEWS */
+    .view { display: none; }
+    #listView { display: block; }
+
+    /* FORM ELEMENTS */
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 700;
+      margin-top: 12px;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      color: #555;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+      box-sizing: border-box; 
+      font-size: 13px;
+      font-family: inherit;
+    }
+
+    input[type="checkbox"] {
+      width: auto !important; 
+      margin-right: 8px;
+      cursor: pointer;
+    }
+
+    textarea {
+      height: 70px;
+      resize: vertical;
+      font-family: monospace;
+    }
+
+    /* BUTTONS */
+    button {
+      width: 100%;
+      margin-top: 10px;
+      padding: 8px;
+      cursor: pointer;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      transition: background 0.2s;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+
+    .btn-primary { background: #007bff; color: white; }
+    .btn-success { background: #28a745; color: white; }
+    .btn-danger { background: #dc3545; color: white; }
+    .btn-secondary { background: #6c757d; color: white; }
+    .btn-info { background: #17a2b8; color: white; }
+    .btn-warning { background: #ffc107; color: #212529; }
+    
+    .btn-sm {
+      padding: 4px 10px;
+      font-size: 11px;
+      width: auto;
+      margin: 0;
+      display: inline-block;
+    }
+
+    /* CONFIG LIST & BOXES */
+    .config-box {
+      background: white;
+      padding: 10px;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+    }
+
+    .row {
+      display: flex;
+      gap: 5px;
+      margin-bottom: 5px;
+      align-items: center; 
+      justify-content: flex-start;
+    }
+
+    .config-list li {
+      background: #e9ecef;
+      padding: 6px 10px;
+      margin-bottom: 4px;
+      border-radius: 3px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    /* SESSION CARDS */
+    .session-card {
+      background: white;
+      border: 1px solid #ddd;
+      padding: 12px;
+      margin-bottom: 10px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .session-running { border-left: 4px solid #28a745; }
+    .session-paused-captcha { border-left: 4px solid #dc3545; background: #fff5f5; }
+
+    /* LOGS & STATUS */
+    #logContainer {
+      height: 160px;
+      overflow-y: scroll;
+      border: 1px solid #ccc;
+      background: #fff;
+      font-size: 11px;
+      padding: 6px;
+      margin-top: 10px;
+      border-radius: 4px;
+      font-family: monospace;
+    }
+
+    .progress-container {
+      width: 100%;
+      background: #e9ecef;
+      height: 10px;
+      margin: 8px 0;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      height: 100%;
+      background: #28a745;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    
+    /* DETAILS */
+    details {
+      margin-top: 10px;
+      background: white;
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+    }
+
+    summary {
+      padding: 8px 12px;
+      cursor: pointer;
+      background: #f1f3f5;
+      font-size: 12px;
+      font-weight: bold;
+      outline: none;
+      user-select: none;
+    }
+    
+    details[open] summary {
+        border-bottom: 1px solid #dee2e6;
+    }
+
+    details > div {
+      padding: 10px;
+    }
+
+    .engine-tag {
+      display: inline-flex;
+      align-items: center;
+      background: #d1ecf1;
+      color: #0c5460;
+      padding: 3px 6px;
+      border-radius: 3px;
+      font-size: 10px;
+      margin: 2px;
+      border: 1px solid #bee5eb;
+    }
+    
+    .remove-engine-btn {
+        margin-left: 5px;
+        cursor: pointer;
+        font-weight: bold;
+        color: #dc3545;
+        font-size: 12px;
+        line-height: 1;
+    }
+    .remove-engine-btn:hover {
+        color: #a71d2a;
+    }
+
+    /* TASK LIST STYLES */
+    .task-scroll-box {
+        max-height: 250px;
+        overflow-y: auto;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        background: #fff;
+        margin-top: 5px;
+    }
+    .task-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 6px 8px;
+        border-bottom: 1px solid #f1f1f1;
+        font-size: 11px;
+    }
+    .task-item:last-child { border-bottom: none; }
+    .task-item:hover { background: #f8f9fa; }
+    
+    .status-badge {
+        padding: 2px 5px;
+        border-radius: 3px;
+        font-size: 9px;
+        font-weight: bold;
+        text-transform: uppercase;
+        width: 60px;
+        text-align: center;
+        display: inline-block;
+    }
+    .st-OPEN { background: #e2e6ea; color: #555; }
+    .st-RUNNING { background: #cce5ff; color: #004085; }
+    .st-DONE { background: #d4edda; color: #155724; }
+    .st-FAILED { background: #f8d7da; color: #721c24; }
+    .st-CANCELLED { background: #fff3cd; color: #856404; text-decoration: line-through; }
+
+    .del-task-btn {
+        color: #dc3545;
+        font-weight: bold;
+        cursor: pointer;
+        padding: 2px 6px;
+        font-size: 14px;
+    }
+    .del-task-btn:hover { background: #ffeeee; border-radius: 4px; }
+    
+    .filter-bar { display: flex; gap: 4px; margin-bottom: 5px; }
+    .filter-btn { flex: 1; font-size: 10px; padding: 4px; background: #e9ecef; border: none; cursor: pointer; border-radius: 3px; }
+    .filter-btn.active { background: #6c757d; color: white; }
+
+    /* SETTINGS BADGES */
+    .setting-badge {
+        font-size: 10px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        margin-right: 4px;
+        background: #e9ecef;
+        color: #999;
+        border: 1px solid #dee2e6;
+    }
+    .setting-active {
+        background: #d4edda;
+        color: #155724;
+        border-color: #c3e6cb;
+        font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="listView" class="view">
+    <div style="display:flex; justify-content:space-between; align-items:center">
+      <h2>RAT Dashboard</h2>
+      <span style="font-size:10px; color:#888">1.0</span>
+    </div>
+    <button id="createSessionBtn" class="btn-primary">+ New Study Session</button>
+    <div style="margin-top:15px; font-size:12px; font-weight:bold; color:#666; margin-bottom:5px">Your Sessions</div>
+    <div id="sessionList"></div>
+    <hr style="margin: 15px 0; border: 0; border-top: 1px solid #eee;">
+    <div class="row">
+      <button id="exportAllBtn" class="btn-secondary" style="font-size:11px">Backup All</button>
+      <button id="importBtn" class="btn-secondary" style="font-size:11px">Restore</button>
+    </div>
+    <input type="file" id="importFile" style="display:none">
+  </div>
+
+  <div id="createView" class="view">
+    <h2>Create RAT Session</h2>
+    <label>Session Name</label>
+    <input type="text" id="sessName" placeholder="e.g. Market Analysis Q3">
+    <label>Queries (one per line)</label>
+    <textarea id="sessQueries" placeholder="keyword 1&#10;keyword 2"></textarea>
+    <label>Configuration</label>
+    <div class="config-box">
+      <div class="row"><select id="confEngineSelect" style="flex:1; font-weight:bold"></select></div>
+      <div class="row">
+        <select id="confCountrySelect" style="flex:1"><option value="" disabled selected>Select Country</option></select>
+        <select id="confLangSelect" style="flex:1"><option value="" disabled selected>Select Language</option></select>
+      </div>
+      <div class="row"><input type="text" id="confLoc" placeholder="Location (City / UULE) - Optional" style="flex:1"></div>
+      <button id="addConfigBtn" class="btn-info btn-sm" style="margin-top:5px">Add Search Engine</button>
+      <ul id="addedConfigsList" class="config-list" style="padding:0; margin-top:8px"></ul>
+    </div>
+    
+    <label style="margin-top:15px">Advanced & Proxies</label>
+    <div style="background:white; padding:10px; border:1px solid #dee2e6; border-radius:4px;">
+        <div class="row" style="margin-bottom:8px;">
+            <input type="checkbox" id="saveScreenshots" checked>
+            <span style="font-size:12px;">Save Screenshots</span>
+        </div>
+        <div class="row" style="margin-bottom:8px;">
+            <input type="checkbox" id="saveHtml" checked>
+            <span style="font-size:12px;">Save HTML</span>
+        </div>
+        <div style="border-top:1px solid #eee; padding-top:8px; margin-top:8px;">
+            <div class="row" style="margin-bottom:8px;">
+                <input type="checkbox" id="useProxies">
+                <span style="font-size:12px; font-weight:bold">Enable Proxies</span>
+            </div>
+            <textarea id="proxyList" placeholder="IP:Port:User:Pass" style="height:50px; font-family:monospace;" disabled></textarea>
+        </div>
+    </div>
+    
+    <div class="row" style="margin-top:10px">
+      <div style="flex:1"><label>Min (s)</label><input type="number" id="sessMin" value="5"></div>
+      <div style="flex:1"><label>Max (s)</label><input type="number" id="sessMax" value="15"></div>
+    </div>
+    <label>Target Results</label>
+    <input type="number" id="sessLimit" value="10">
+    <div class="row" style="margin-top:15px">
+      <button id="backBtn" class="btn-secondary">Cancel</button>
+      <button id="startScrapeBtn" class="btn-success">Create & Queue</button>
+    </div>
+  </div>
+
+  <div id="statusView" class="view">
+    <h2 id="statusTitle">Session Name</h2>
+    
+    <div style="background:white; padding:12px; border:1px solid #eee; border-radius:4px">
+      <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:5px">
+        <span>Status: <strong id="statusState">...</strong></span>
+        <span id="progressText">0 / 0</span>
+      </div>
+      <div class="progress-container"><div id="progressBar" class="progress-bar"></div></div>
+      <div style="font-size:11px; color:#666; margin-top:6px">Processing: <span id="currentQuery" style="font-family:monospace; font-weight:bold">...</span></div>
+    </div>
+
+    <div id="sessionManagement" style="margin-top:10px;">
+        
+        <details>
+            <summary>ℹ️ Active Configuration</summary>
+            <div>
+                <div style="margin-bottom:10px; border-bottom:1px solid #eee; padding-bottom:8px">
+                    <span id="badgeScreenshots" class="setting-badge">📸 IMG</span>
+                    <span id="badgeHtml" class="setting-badge">📄 HTML</span>
+                    <span id="badgeProxies" class="setting-badge">🛡️ PROXY</span>
+                </div>
+
+                <label style="margin-top:0">Active Search Engines:</label>
+                <div id="activeEnginesList" style="margin-bottom:8px;"></div>
+                <div style="font-size:10px; color:#666;">Total Queries: <span id="totalQueriesCount">0</span></div>
+            </div>
+        </details>
+
+        <details>
+            <summary>➕ Add Tasks (Queries / Engines)</summary>
+            <div>
+                <label style="margin-top:0">Add New Queries</label>
+                <textarea id="addQueryInput" placeholder="New keyword..." style="height:50px;"></textarea>
+                <button id="submitNewQueries" class="btn-info btn-sm" style="margin-top:5px; margin-bottom:10px;">Add Queries</button>
+                
+                <hr style="border:0; border-top:1px solid #eee;">
+                
+                <label>Add New Search Engine</label>
+                <div class="row">
+                   <select id="editConfCountrySelect" style="flex:1"></select>
+                   <select id="editConfLangSelect" style="flex:1"></select>
+                </div>
+                <div class="row"><input type="text" id="editConfLoc" placeholder="Location" style="flex:1"></div>
+                <button id="submitNewEngine" class="btn-warning btn-sm" style="margin-top:5px">Add Engine & Generate Tasks</button>
+            </div>
+        </details>
+
+        <details>
+            <summary>🛡️ Proxy Settings</summary>
+            <div>
+                <div class="row" style="margin-bottom:8px;">
+                    <input type="checkbox" id="editUseProxies" style="width:auto; margin-right:8px;">
+                    <span style="font-size:12px;">Enable Proxy Rotation</span>
+                </div>
+                <textarea id="editProxyList" placeholder="IP:Port:User:Pass" style="height:80px; font-family:monospace;"></textarea>
+                <button id="saveProxySettings" class="btn-primary btn-sm">Update Proxies</button>
+            </div>
+        </details>
+
+        <details id="taskManagerDetails">
+            <summary>📝 Manage Tasks (Individual)</summary>
+            <div>
+                <div class="row">
+                    <button id="refreshTasksBtn" class="btn-secondary btn-sm" style="margin:0; width:auto;">↻ Refresh List</button>
+                    <span style="font-size:10px; color:#888; margin-left:auto;">Showing <span id="taskCountDisplay">0</span> tasks</span>
+                </div>
+                
+                <div class="filter-bar" style="margin-top:8px;">
+                    <button class="filter-btn active" data-filter="ALL">All</button>
+                    <button class="filter-btn" data-filter="OPEN">Pending</button>
+                    <button class="filter-btn" data-filter="DONE">Done</button>
+                    <button class="filter-btn" data-filter="CANCELLED">Cancelled</button>
+                </div>
+
+                <div id="taskListContainer" class="task-scroll-box">
+                    <div style="padding:10px; text-align:center; color:#999;">Click Refresh to load tasks...</div>
+                </div>
+            </div>
+        </details>
+    </div>
+
+    <div style="background:white; padding:8px 12px; border:1px solid #eee; border-radius:4px; margin-top:8px">
+      <label style="margin-top:0">Delays (Seconds)</label>
+      <div class="row">
+        <input type="number" id="liveMin" style="flex:1; padding:4px" placeholder="Min">
+        <input type="number" id="liveMax" style="flex:1; padding:4px" placeholder="Max">
+        <button id="applyDelayBtn" class="btn-secondary btn-sm" style="width:auto; margin:0">Set</button>
+      </div>
+      
+      <label style="margin-top:8px">Target Results</label>
+      <div class="row">
+        <input type="number" id="liveLimit" style="flex:1; padding:4px" placeholder="Ex: 10">
+        <button id="applyLimitBtn" class="btn-secondary btn-sm" style="width:auto; margin:0">Update</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <button id="playPauseBtn" class="btn-primary">Start</button>
+      <button id="stopBtn" class="btn-danger">Delete</button>
+    </div>
+
+    <button id="downloadBtn" class="btn-info" style="margin-top:8px">Download Results (ZIP)</button>
+
+    <label style="margin-top:12px">Activity Log</label>
+    <div id="logContainer"></div>
+    <button id="backToListBtn" class="btn-secondary" style="margin-top:10px">Back to Overview</button>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
