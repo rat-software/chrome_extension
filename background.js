@@ -1,31 +1,49 @@
-// background.js - Version 21.0 (Fixed UI Lag)
+/**
+ * @file background.js - Version 1.0
+ * Core Service Worker for the Result Assessment Tool (RAT).
+ * Handles persistence (IndexedDB), proxy rotation, and the main scraping queue.
+ */
 
-// --- 0. POWER & IMPORTS ---
+// --- 0. POWER & EXTERNAL LIBRARIES ---
+
+/**
+ * Request 'system' keep-awake to prevent the OS from sleeping 
+ * while the long-running scraper is active.
+ */
 try {
     chrome.power.requestKeepAwake('system');
 } catch (e) {
     console.warn("Power API not available (Add 'power' to manifest).");
 }
 
+/**
+ * Import JSZip for generating compressed result exports.
+ */
 try {
     importScripts('jszip.min.js');
 } catch (e) {
     console.error("CRITICAL: jszip.min.js missing.");
 }
 
-const DB_NAME = "RAT_Database_V7";
-const STORE_SESSIONS = "sessions";
-const STORE_RESULTS = "results";
-const STORE_LOGS = "logs";
-const MAX_PAGES = 15;
+// --- 1. CONFIGURATION & STATE ---
 
-// --- Variablen ---
-const RETRY_DELAYS = [5, 15, 30, 60]; // Minuten
-let activeCaptchaListeners = {}; 
-let db;
-let currentProxyAuth = null; 
+// IndexedDB Configuration
+const DB_NAME = "RAT_Database";
+const STORE_SESSIONS = "sessions"; // Metadata for study sessions
+const STORE_RESULTS = "results";   // HTML and Screenshots
+const STORE_LOGS = "logs";         // Activity history
+const MAX_PAGES = 15;              // Maximum depth per keyword
 
-// --- PROXY AUTHENTICATION HANDLER ---
+// State Variables
+const RETRY_DELAYS = [5, 15, 30, 60]; // Retry intervals in minutes after a CAPTCHA
+let activeCaptchaListeners = {};      // Stores event listeners for tabs blocked by CAPTCHA
+let db;                               // Global database instance
+let currentProxyAuth = null;          // Stores current credentials for onAuthRequired
+
+/**
+ * Injects Proxy credentials into the browser's network request lifecycle.
+ * Acts as a listener for proxies requiring username/password authentication.
+ */
 chrome.webRequest.onAuthRequired.addListener(
     (details) => {
         if (currentProxyAuth) {
@@ -42,9 +60,16 @@ chrome.webRequest.onAuthRequired.addListener(
     ["blocking"]
 );
 
+/**
+ * Parses and sets a random proxy from the provided list.
+ * @param {string} sessionId - ID of the active session for logging.
+ * @param {string[]} proxyList - Array of strings (format: IP:Port:User:Pass).
+ * @returns {Promise<boolean>}
+ */
 async function setRandomProxy(sessionId, proxyList) {
     if (!proxyList || proxyList.length === 0) return false;
 
+    // Select random proxy and split components
     const randomLine = proxyList[Math.floor(Math.random() * proxyList.length)];
     const parts = randomLine.trim().split(':');
 
@@ -67,6 +92,7 @@ async function setRandomProxy(sessionId, proxyList) {
         }
     };
 
+    // Store auth for the webRequest listener
     currentProxyAuth = { username: user, password: pass };
 
     return new Promise((resolve) => {
@@ -77,7 +103,10 @@ async function setRandomProxy(sessionId, proxyList) {
     });
 }
 
-// --- ALARM LISTENER ---
+/**
+ * Alarm listener to wake up the service worker for retries.
+ * Used primarily for recovering after CAPTCHA pauses.
+ */
 chrome.alarms.onAlarm.addListener(async (alarm) => {
     if (alarm.name.startsWith("retry_session_")) {
         const sessionId = alarm.name.replace("retry_session_", "");
@@ -88,8 +117,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
         if (!db) await initDB();
         
-        logToSession(sessionId, `⏰ ALARM: Zeit abgelaufen. Service Worker geweckt. Starte Neustart...`, "INFO");
+        logToSession(sessionId, `⏰ ALARM: Time's up. Service worker awakened. Starting restart...`, "INFO");
 
+        // Close old tab if it still exists
         if (tabId) {
             try { await chrome.tabs.remove(tabId); } catch(e) {}
         }
@@ -101,7 +131,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
 });
 
-// --- 1. INITIALIZATION ---
+// --- 2. INITIALIZATION (DB) ---
+
+/**
+ * Initializes the IndexedDB instance and creates necessary object stores.
+ */
 async function initDB() {
     return new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, 7);
@@ -125,7 +159,14 @@ async function initDB() {
     });
 }
 
-// --- 2. LOGGING ENGINE ---
+// --- 3. LOGGING ENGINE ---
+
+/**
+ * Adds a log entry to the DB and sends a message to the UI.
+ * @param {string} sessionId 
+ * @param {string} text - The log message.
+ * @param {string} level - INFO, WARN, SUCCESS, or ERROR.
+ */
 async function logToSession(sessionId, text, level = "INFO") {
     if (!db) await initDB();
     const entry = {
@@ -142,6 +183,9 @@ async function logToSession(sessionId, text, level = "INFO") {
     }).catch(() => { });
 }
 
+/**
+ * Retrieves all logs for a specific session.
+ */
 async function getLogs(sessionId) {
     if (!db) await initDB();
     return new Promise(r => {
@@ -151,7 +195,9 @@ async function getLogs(sessionId) {
     });
 }
 
-// --- 3. DATA HELPERS ---
+// --- 4. DATA HELPERS ---
+
+/** Updates session metadata in DB. */
 async function saveSession(session) {
     if (!db) await initDB();
     const tx = db.transaction(STORE_SESSIONS, "readwrite");
@@ -159,6 +205,7 @@ async function saveSession(session) {
     return new Promise(r => tx.oncomplete = r);
 }
 
+/** Fetches session metadata by ID. */
 async function getSession(id) {
     if (!db) await initDB();
     const tx = db.transaction(STORE_SESSIONS, "readonly");
@@ -168,6 +215,7 @@ async function getSession(id) {
     });
 }
 
+/** Fetches all stored sessions. */
 async function getAllSessions() {
     if (!db) await initDB();
     const tx = db.transaction(STORE_SESSIONS, "readonly");
@@ -177,11 +225,13 @@ async function getAllSessions() {
     });
 }
 
+/** Saves scraped HTML/Screenshots for a specific page. */
 async function savePageContent(sessionId, taskIdx, pageNum, content) {
     const tx = db.transaction(STORE_RESULTS, "readwrite");
     tx.objectStore(STORE_RESULTS).put(content, `${sessionId}_${taskIdx}_${pageNum}`);
 }
 
+/** Retrieves scraped HTML/Screenshots for a specific page. */
 async function getPageContent(sessionId, taskIdx, pageNum) {
     const tx = db.transaction(STORE_RESULTS, "readonly");
     return new Promise(r => {
@@ -190,29 +240,40 @@ async function getPageContent(sessionId, taskIdx, pageNum) {
     });
 }
 
+/** Checks if a session is currently stopped or paused. */
 async function isPaused(sessionId) {
     const s = await getSession(sessionId);
     return (!s || (s.status !== "RUNNING"));
 }
 
-// --- 4. MESSAGING ---
+// --- 5. MESSAGING & ROUTING ---
+
+/**
+ * Listener for extension installation.
+ */
 chrome.runtime.onInstalled.addListener(async () => {
     chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => { });
     await initDB();
-    chrome.proxy.settings.clear({ scope: 'regular' });
+    chrome.proxy.settings.clear({ scope: 'regular' }); // Reset proxies on install
 });
 
 chrome.runtime.onStartup.addListener(() => initDB());
 
+/**
+ * Central messaging hub for the UI (sidepanel.js).
+ */
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.action === "IMPORT_FULL_BACKUP") {
         importFullBackup(msg.payload.file).then(() => sendResponse({ success: true }));
     } else {
         handleMessage(msg).then(sendResponse);
     }
-    return true;
+    return true; // Keep channel open for async response
 });
 
+/**
+ * Routes actions from the UI to the correct internal functions.
+ */
 async function handleMessage(msg) {
     if (!db) await initDB();
     switch (msg.action) {
@@ -224,23 +285,22 @@ async function handleMessage(msg) {
         case "DELETE_SESSION": if (msg.payload.sessionId) deleteSession(msg.payload.sessionId); break;
         case "DOWNLOAD_DATA": exportDataAsZip(msg.payload.sessionId); break;
         case "EXPORT_SESSIONS": exportFullBackup(); break;
-        
-        // --- UPDATES ---
         case "UPDATE_DELAY": updateSessionDelay(msg.payload); break;
         case "UPDATE_LIMIT": updateSessionLimit(msg.payload); break; 
-        
-        // --- MANAGING ACTIONS ---
         case "ADD_ITEMS": addItemsToSession(msg.payload); break;
         case "UPDATE_PROXIES": updateSessionProxies(msg.payload); break;
         case "REMOVE_CONFIG": removeConfigFromSession(msg.payload); break;
-        
         case "GET_TASKS": broadcastSessionTasks(msg.payload.sessionId); break;
         case "REMOVE_TASK": removeSingleTask(msg.payload); break;
     }
 }
 
-// --- 5. SMART CAPTCHA HANDLER ---
+// --- 6. CAPTCHA HANDLING ---
 
+/**
+ * Orchestrates what happens when content.js detects a CAPTCHA.
+ * It attempts proxy rotation first, then falls back to a timed delay.
+ */
 async function handleCaptchaEvent(sessionId, tabId) {
     const s = await getSession(sessionId);
     if (!s || s.status !== "RUNNING") return;
@@ -259,36 +319,40 @@ async function handleCaptchaEvent(sessionId, tabId) {
     const useProxies = s.settings && s.settings.useProxies;
     const proxyList = s.settings && s.settings.proxyList || [];
 
+    // Attempt Proxy Switch (Max 3 attempts)
     if (useProxies && proxyList.length > 0 && proxyTryCount < 3) {
-        logToSession(sessionId, `🛡️ CAPTCHA erkannt. Versuche Proxy-Wechsel (${proxyTryCount + 1}/3)...`, "WARN");
+        logToSession(sessionId, `🛡️ CAPTCHA detected. Attempt proxy change (${proxyTryCount + 1}/3)...`, "WARN");
         cleanupCaptchaHandling(sessionId);
         await setRandomProxy(sessionId, proxyList);
         try { await chrome.tabs.remove(tabId); } catch(e) {}
         await chrome.storage.local.set({ [storageKeyProxyTry]: proxyTryCount + 1 });
-        logToSession(sessionId, "🔄 Task-Neustart mit neuer IP...", "INFO");
+        logToSession(sessionId, "🔄 Task restart with new IP...", "INFO");
         resumeSession(sessionId);
         return; 
     }
 
+    // Fallback: If proxies failed, revert to direct connection and wait
     if (proxyTryCount >= 3) {
-        logToSession(sessionId, "❌ 3 Proxy-Versuche gescheitert. Deaktiviere Proxies & gehe in den Langzeit-Modus.", "ERROR");
+        logToSession(sessionId, "❌ 3 proxy attempts failed. Disable proxies & switch to long-term mode.", "ERROR");
         await new Promise(r => chrome.proxy.settings.clear({ scope: 'regular' }, r));
         currentProxyAuth = null;
-        logToSession(sessionId, "🌍 Verbindung zurückgesetzt auf Direct Connection.", "INFO");
+        logToSession(sessionId, "🌍 Connection reset to Direct Connection.", "INFO");
         try { await chrome.tabs.reload(tabId); } catch(e) {}
         await chrome.storage.local.set({ [storageKeyProxyTry]: 0 });
     }
 
+    // Setup manual solve monitor or auto-retry alarm
     await chrome.storage.local.set({ [`tab_${sessionId}`]: tabId });
     const retryLevel = Math.min(retryCount, RETRY_DELAYS.length - 1);
     const waitMinutes = RETRY_DELAYS[retryLevel];
     
-    logToSession(sessionId, `🛡️ Automation pausiert.`, "WARN");
-    logToSession(sessionId, `👉 A: Manuell lösen (Überwachung aktiv).`, "INFO");
-    logToSession(sessionId, `👉 B: Auto-Retry (via Chrome Alarm) in ${waitMinutes} Minuten.`, "INFO");
+    logToSession(sessionId, `🛡️ Automation paused.`, "WARN");
+    logToSession(sessionId, `👉 A: Manual solve (monitoring tab...).`, "INFO");
+    logToSession(sessionId, `👉 B: Auto-Retry via alarm in ${waitMinutes} minutes.`, "INFO");
 
     cleanupCaptchaHandling(sessionId);
 
+    // Event listener to detect when user solves CAPTCHA manually
     const onTabUpdated = async (updatedTabId, changeInfo, tab) => {
         if (updatedTabId !== tabId) return;
         const currentUrl = (tab.url || changeInfo.url || "").toLowerCase();
@@ -298,6 +362,7 @@ async function handleCaptchaEvent(sessionId, tabId) {
             onTabUpdated.isResolving = true; 
             await sleep(1500); 
             try {
+                // Communicate with content.js to verify if search results are visible
                 let check = await chrome.tabs.sendMessage(tabId, { action: "CHECK_CAPTCHA" }).catch(() => null);
                 if (!check) {
                     await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] }).catch(() => {});
@@ -305,7 +370,7 @@ async function handleCaptchaEvent(sessionId, tabId) {
                     check = await chrome.tabs.sendMessage(tabId, { action: "CHECK_CAPTCHA" }).catch(() => null);
                 }
                 if (check && !check.isCaptcha) {
-                    logToSession(sessionId, "✅ URL sauber & Captcha weg! Setze fort...", "SUCCESS");
+                    logToSession(sessionId, "✅ URL clean & captcha gone! Continue...", "SUCCESS");
                     cleanupCaptchaHandling(sessionId);
                     await chrome.storage.local.set({ [storageKeyRetry]: 0, [storageKeyProxyTry]: 0 });
                     resumeSession(sessionId);
@@ -323,6 +388,7 @@ async function handleCaptchaEvent(sessionId, tabId) {
     chrome.alarms.create(`retry_session_${sessionId}`, { delayInMinutes: waitMinutes });
 }
 
+/** Removes alarms and tab listeners for a specific session. */
 function cleanupCaptchaHandling(sessionId) {
     chrome.alarms.clear(`retry_session_${sessionId}`);
     if (activeCaptchaListeners[sessionId]) {
@@ -331,6 +397,7 @@ function cleanupCaptchaHandling(sessionId) {
     }
 }
 
+/** Switches session status to RUNNING and triggers queue. */
 async function resumeSession(sessionId) {
     if (!db) await initDB();
     const s = await getSession(sessionId);
@@ -342,8 +409,9 @@ async function resumeSession(sessionId) {
     }
 }
 
-// --- 6. SCRAPER CORE ---
+// --- 7. SCRAPER CORE ---
 
+/** Sends the list of tasks (terms/engines) to the UI. */
 async function broadcastSessionTasks(sessionId) {
     const session = await getSession(sessionId);
     if (!session) return;
@@ -351,6 +419,7 @@ async function broadcastSessionTasks(sessionId) {
     const simplifiedTasks = session.tasks.map((t, index) => ({
         index: index,
         term: t.term,
+        engine: t.config.engineName || "Google",
         country: t.config.countryCode,
         lang: t.config.langCode,
         status: t.status,
@@ -363,6 +432,7 @@ async function broadcastSessionTasks(sessionId) {
     }).catch(() => {});
 }
 
+/** Cancels a single pending task. */
 async function removeSingleTask(payload) {
     const { sessionId, taskIndex } = payload;
     const session = await getSession(sessionId);
@@ -383,6 +453,7 @@ async function removeSingleTask(payload) {
     broadcastSessionTasks(sessionId);  
 }
 
+/** Injects new keywords or engine configurations into an existing session. */
 async function addItemsToSession(payload) {
     const { sessionId, newQueries, newConfigs } = payload;
     const session = await getSession(sessionId);
@@ -390,6 +461,7 @@ async function addItemsToSession(payload) {
 
     let newTasks = [];
 
+    // Combine new keywords with existing engines
     if (newQueries && newQueries.length > 0) {
         const configsToRun = session.originalConfigs; 
         const tasks = newQueries.flatMap(q => configsToRun.map(conf => ({
@@ -400,6 +472,7 @@ async function addItemsToSession(payload) {
         logToSession(sessionId, `➕ Added ${newQueries.length} new queries.`);
     }
 
+    // Combine existing keywords with new engines
     if (newConfigs && newConfigs.length > 0) {
         const queriesToRun = session.originalQueries;
         const tasks = queriesToRun.flatMap(q => newConfigs.map(conf => ({
@@ -425,6 +498,8 @@ async function addItemsToSession(payload) {
     }
 }
 
+/** * Removes an engine from the session and cancels all associated pending tasks. 
+ */
 async function removeConfigFromSession(payload) {
     const { sessionId, configIndex } = payload;
     const session = await getSession(sessionId);
@@ -454,6 +529,7 @@ async function removeConfigFromSession(payload) {
     broadcastSessionStatus(sessionId);
 }
 
+/** Updates proxy settings for a live session. */
 async function updateSessionProxies(payload) {
     const { sessionId, useProxies, proxyListStr } = payload;
     const session = await getSession(sessionId);
@@ -479,6 +555,9 @@ async function updateSessionProxies(payload) {
     broadcastSessionStatus(sessionId);
 }
 
+/** * Entry point for creating a new study. 
+ * Splits queries and engines into individual Task objects.
+ */
 async function createNewSession(payload) {
     const { name, queries, configs, resultsLimit, delays, saveScreenshots, saveHtml, useProxies, proxyListStr } = payload;
     
@@ -507,6 +586,7 @@ async function createNewSession(payload) {
     chrome.runtime.sendMessage({ type: "SESSION_CREATED" }).catch(() => { });
 }
 
+/** Resets error counters and starts the processing queue. */
 async function startSession(id) {
     const s = await getSession(id);
     if (!s) return;
@@ -517,6 +597,7 @@ async function startSession(id) {
     processQueue(id);
 }
 
+/** Pauses the scraper, noting whether it was by user command or CAPTCHA. */
 async function pauseSession(id, reason = "USER", tabId = null) {
     const s = await getSession(id);
     if (s) {
@@ -530,6 +611,7 @@ async function pauseSession(id, reason = "USER", tabId = null) {
     }
 }
 
+/** Removes all session data from all DB object stores. */
 async function deleteSession(id) {
     cleanupCaptchaHandling(id);
     const tx = db.transaction([STORE_SESSIONS, STORE_RESULTS, STORE_LOGS], "readwrite");
@@ -538,10 +620,14 @@ async function deleteSession(id) {
     broadcastSessionList();
 }
 
+/** * THE HEART OF THE SCRAPER: 
+ * Iterates through open tasks and handles the tab-based scraping lifecycle.
+ */
 async function processQueue(sessionId) {
     let session = await getSession(sessionId);
     if (!session || session.status !== "RUNNING") return;
 
+    // Find first task marked as 'OPEN'
     const nextIdx = session.tasks.findIndex(t => t.status === "OPEN");
     if (nextIdx === -1) {
         session.status = "DONE";
@@ -553,13 +639,12 @@ async function processQueue(sessionId) {
 
     session.currentIndex = nextIdx;
     const currentTask = session.tasks[nextIdx];
-    
-    // --- BUGFIX: Index sofort speichern, damit UI synchron ist ---
     await saveSession(session);
 
     let collectedOrganic = currentTask.totalOrganic || 0;
     let currentPage = currentTask.pages.length + 1;
 
+    // Deduplication set to avoid counting same result twice
     const existingUrls = new Set();
     currentTask.pages.forEach(p => p.results.organic.forEach(r => existingUrls.add(r.url)));
 
@@ -571,9 +656,11 @@ async function processQueue(sessionId) {
         const url = buildSearchUrl(currentTask.term, currentTask.config);
         logToSession(sessionId, `🔗 INITIALIZING: ${url}`);
 
+        // Create browser tab
         const tab = await new Promise(r => chrome.tabs.create({ url, active: true }, r));
         tabId = tab.id;
 
+        // PAGINATION LOOP
         while (collectedOrganic < session.globalCount && currentPage <= MAX_PAGES) {
 
             if (await isPaused(sessionId)) break;
@@ -583,6 +670,7 @@ async function processQueue(sessionId) {
 
             if (await isPaused(sessionId)) break;
             
+            // Inject content.js and check for CAPTCHA
             await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
             await sleep(getRandomDelay(2000, 4000));
 
@@ -592,12 +680,14 @@ async function processQueue(sessionId) {
                 return;
             }
 
+            // Simulate human interaction
             logToSession(sessionId, `📜 BEHAVIOR: Human-like Scrolling Page ${currentPage}...`);
             await chrome.tabs.sendMessage(tabId, { action: "SCROLL_AND_PREPARE" }).catch(() => { });
             await sleep(getRandomDelay(3000, 6000));
 
             if (await isPaused(sessionId)) break;
 
+            // Optional Screenshot
             let screenshotData = null;
             if (session.settings && session.settings.saveScreenshots) {
                 logToSession(sessionId, "📸 CAPTURING: Full page screenshot...");
@@ -606,6 +696,7 @@ async function processQueue(sessionId) {
 
             if (await isPaused(sessionId)) break;
             
+            // Execute Scraping
             logToSession(sessionId, "🔍 SCRAPING: Extracting data...");
             const response = await chrome.tabs.sendMessage(tabId, { action: "SCRAPE_SERP", payload: { startRank: collectedOrganic } }).catch(() => null);
 
@@ -614,11 +705,13 @@ async function processQueue(sessionId) {
                  return;
             }
 
+            // Save results
             if (response && response.data) {
                 const data = response.data;
                 const newOrganic = data.organic.filter(r => !existingUrls.has(r.url));
                 newOrganic.forEach(r => existingUrls.add(r.url));
 
+                // Trim to target count
                 const remainingQuota = session.globalCount - collectedOrganic;
                 const finalOrganicForPage = newOrganic.slice(0, Math.max(0, remainingQuota));
                 data.organic = finalOrganicForPage;
@@ -648,6 +741,7 @@ async function processQueue(sessionId) {
 
                 if (await isPaused(sessionId)) break;
 
+                // Navigate to next page
                 const nav = await chrome.tabs.sendMessage(tabId, { action: "NAVIGATE_NEXT" });
                 
                 if (nav && nav.isCaptcha) {
@@ -661,6 +755,8 @@ async function processQueue(sessionId) {
                 }
 
                 currentPage++;
+                
+                // Human-like idle wait
                 const wait = getRandomDelay(session.delays.min, session.delays.max);
                 logToSession(sessionId, `😴 IDLE: Random wait ${Math.round(wait / 1000)}s...`);
                 for (let i = 0; i < wait; i += 500) {
@@ -670,6 +766,7 @@ async function processQueue(sessionId) {
             } else { throw new Error("Scrape failed."); }
         }
 
+        // Mark task as done if logic wasn't interrupted
         const finalCheck = await getSession(sessionId);
         if (finalCheck && finalCheck.status === "RUNNING") {
             currentTask.status = "DONE";
@@ -681,12 +778,14 @@ async function processQueue(sessionId) {
         logToSession(sessionId, `❌ ERROR: ${error.message}`, "ERROR");
         await handleRetry(sessionId, currentTask, error.message);
     } finally {
+        // Clean up: close tab unless we are paused for a CAPTCHA (so user can solve it)
         const check = await getSession(sessionId);
         if (tabId && (!check || check.status !== "PAUSED_CAPTCHA")) {
              await chrome.tabs.remove(tabId).catch(() => { });
         }
     }
 
+    // Trigger next task if still running
     session = await getSession(sessionId);
     if (session && session.status === "RUNNING") {
         const cooldown = getRandomDelay(5000, 10000);
@@ -695,8 +794,9 @@ async function processQueue(sessionId) {
     }
 }
 
-// --- 7. EXPORTS ---
+// --- 8. EXPORTS & BACKUPS ---
 
+/** Exports all DB data (Metadata + JSON Results) as a ZIP. */
 async function exportFullBackup() {
     chrome.runtime.sendMessage({ type: "EXPORT_STARTED" });
     const sessions = await getAllSessions();
@@ -725,9 +825,11 @@ async function exportFullBackup() {
     });
 }
 
+/** * Exports a specific session as a CSV + Screenshots + HTML ZIP. 
+ */
 async function exportDataAsZip(sessionId) {
     chrome.runtime.sendMessage({ type: "EXPORT_STARTED" });
-    await logToSession(sessionId, "🔨 Generierung des Exports gestartet. Bitte warten...");
+    await logToSession(sessionId, "🔨 Generation of export started. Please wait...");
 
     try {
         const session = await getSession(sessionId);
@@ -740,6 +842,7 @@ async function exportDataAsZip(sessionId) {
             zip.file("activity_log.txt", logs.map(l => `[${l.ts}] [${l.level || 'INFO'}] ${l.msg}`).join("\n"));
         }
 
+        // Initialize CSV header
         let csv = "\uFEFFquery,engine,country,lang,page,type,rank,title,url,snippet,ai_full_text\n";
         const esc = (t) => t ? `"${String(t).replace(/"/g, '""')}"` : '""';
 
@@ -748,20 +851,30 @@ async function exportDataAsZip(sessionId) {
             const q = session.tasks[tIdx];
             if (!q.pages || q.pages.length === 0) continue;
             
-            const meta = `${esc(q.term)},${esc(q.config.engineName)},${esc(q.config.countryName)},${esc(q.config.langCode)}`;
+            const engineName = q.config.engineName || "Google";
+            const langStr = q.config.langCode ? q.config.langCode : "Auto";
+            const meta = `${esc(q.term)},${esc(engineName)},${esc(q.config.countryName)},${esc(langStr)}`;
+            
+            // Filename sanitization
+            const engineSafe = engineName.replace(/[^a-zA-Z0-9]/g, '');
+            const termSafe = q.term.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 30);
+            const countrySafe = (q.config.countryCode || "us").toUpperCase();
+            const langSafe = langStr.toUpperCase();
             
             for (const p of q.pages) {
                 const extra = await getPageContent(sessionId, tIdx, p.pageNumber);
+                const baseFileName = `${engineSafe}_${countrySafe}_${langSafe}_${termSafe}_p${p.pageNumber}`;
                 
                 if (extra) {
                     if (extra.screenshot) {
-                        imgFolder.file(`t${tIdx}_p${p.pageNumber}.jpg`, extra.screenshot.split(',')[1], { base64: true });
+                        imgFolder.file(`${baseFileName}.jpg`, extra.screenshot.split(',')[1], { base64: true });
                     }
                     if (extra.html) {
-                        htmlFolder.file(`t${tIdx}_p${p.pageNumber}.html`, extra.html);
+                        htmlFolder.file(`${baseFileName}.html`, extra.html);
                     }
                 }
 
+                // AI Overviews (SGE) processing
                 if (p.results.ai_overview?.found) {
                     csv += `${meta},${p.pageNumber},ai_overview,1,AI Overview,,,${esc(p.results.ai_overview.text_full)}\n`;
                     p.results.ai_overview.sources.forEach((src, idx) => {
@@ -769,10 +882,12 @@ async function exportDataAsZip(sessionId) {
                     });
                 }
 
+                // Organic results
                 p.results.organic.forEach(r => {
                     csv += `${meta},${p.pageNumber},organic,${r.rank},${esc(r.title)},${esc(r.url)},${esc(r.snippet)},\n`;
                 });
                 
+                // Ads processing
                 p.results.ads.forEach(ad => {
                     csv += `${meta},${p.pageNumber},ad,${ad.rank},${esc(ad.title)},${esc(ad.url)},${esc(ad.snippet)},\n`;
                 });
@@ -783,9 +898,9 @@ async function exportDataAsZip(sessionId) {
         }
         
         zip.file("rat_results.csv", csv);
-
-        await logToSession(sessionId, "📦 ZIP-Datei wird finalisiert...");
+        await logToSession(sessionId, "📦 ZIP file is being finalized...");
         
+        // Generate Blob and trigger browser download
         const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
         const reader = new FileReader();
         reader.readAsDataURL(blob);
@@ -798,23 +913,35 @@ async function exportDataAsZip(sessionId) {
                 saveAs: true
             }, (downloadId) => {
                 if (chrome.runtime.lastError) {
-                    logToSession(sessionId, "❌ Download-Fehler: " + chrome.runtime.lastError.message, "ERROR");
+                    logToSession(sessionId, "❌ Download Error: " + chrome.runtime.lastError.message, "ERROR");
                 } else {
-                    logToSession(sessionId, "✅ Download erfolgreich gestartet!");
+                    logToSession(sessionId, "✅ Download successfully started!");
                 }
                 chrome.runtime.sendMessage({ type: "EXPORT_FINISHED" });
             });
         };
 
     } catch (err) {
-        await logToSession(sessionId, "❌ Kritischer Fehler beim Export: " + err.message, "ERROR");
+        await logToSession(sessionId, "❌ Critical Error during Export: " + err.message, "ERROR");
         chrome.runtime.sendMessage({ type: "EXPORT_FINISHED" });
     }
 }
 
-// --- 8. UTILS ---
+// --- 9. UTILITIES ---
+
+/** Generates the Search Engine URL based on engine ID and country/lang config. */
 function buildSearchUrl(term, conf) {
     const q = encodeURIComponent(term);
+    
+    // Bing Implementation
+    if (conf.engineId === "bing") {
+        const cc = conf.countryCode || "us";
+        let u = `https://www.bing.com/search?q=${q}&cc=${cc}`;
+        if (conf.langCode) u += `&setLang=${conf.langCode}`;
+        return u;
+    } 
+    
+    // Google Implementation
     const domain = conf.domain || "www.google.com";
     const gl = conf.countryCode || "us";
     let u = `https://${domain}/search?q=${q}&gl=${gl}`;
@@ -823,11 +950,13 @@ function buildSearchUrl(term, conf) {
     return u;
 }
 
+/** Generates a UULE parameter to spoof physical location in Google. */
 function generateUule(loc) {
     const secret = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     return `w+CAIQICI${secret[loc.length % 65]}${btoa(loc)}`;
 }
 
+/** Captures a full-page screenshot using Chrome Debugger API. */
 async function captureFullPage(tabId) {
     return new Promise((resolve, reject) => {
         chrome.debugger.attach({ tabId }, "1.3", () => {
@@ -837,7 +966,9 @@ async function captureFullPage(tabId) {
                     chrome.debugger.detach({ tabId });
                     return reject("No metrics");
                 }
-                chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { format: "jpeg", quality: 50, fromSurface: true, captureBeyondViewport: true }, (res) => {
+                chrome.debugger.sendCommand({ tabId }, "Page.captureScreenshot", { 
+                    format: "jpeg", quality: 50, fromSurface: true, captureBeyondViewport: true 
+                }, (res) => {
                     chrome.debugger.detach({ tabId });
                     if (res?.data) resolve("data:image/jpeg;base64," + res.data);
                     else reject("No image");
@@ -847,6 +978,7 @@ async function captureFullPage(tabId) {
     });
 }
 
+/** Promise-based check to wait until a tab has finished loading. */
 function waitForTabSmart(tabId) {
     return new Promise(r => {
         chrome.tabs.get(tabId, t => {
@@ -864,6 +996,7 @@ function waitForTabSmart(tabId) {
     });
 }
 
+/** Handles FAILED tasks after 3 retries. */
 async function handleRetry(sessionId, task, errorMsg) {
     if (await isPaused(sessionId)) return;
     task.retryCount++;
@@ -877,6 +1010,7 @@ async function handleRetry(sessionId, task, errorMsg) {
     }
 }
 
+/** Sends full session metadata list to UI. */
 async function broadcastSessionList() {
     const sessions = await getAllSessions();
     const list = sessions.map(s => ({
@@ -891,6 +1025,7 @@ async function broadcastSessionList() {
     chrome.runtime.sendMessage({ type: "SESSION_LIST", payload: list }).catch(() => { });
 }
 
+/** Sends current session status (Logs, Progress, Settings) to the UI. */
 async function broadcastSessionStatus(id) {
     const s = await getSession(id);
     if (!s) return;
@@ -912,19 +1047,22 @@ async function broadcastSessionStatus(id) {
             originalConfigs: s.originalConfigs,
             originalQueries: s.originalQueries,
             settings: s.settings,
-            globalCount: s.globalCount // NEW
+            globalCount: s.globalCount
         }
     }).catch(() => { });
 }
 
+/** Helper: Non-blocking delay. */
 function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));
 }
 
+/** Helper: Random number generator for human-like delays. */
 function getRandomDelay(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+/** Restores an entire database from a ZIP backup. */
 async function importFullBackup(file) {
     const zip = await JSZip.loadAsync(file);
     const metaStr = await zip.file("sessions_metadata.json").async("string");
@@ -941,6 +1079,7 @@ async function importFullBackup(file) {
     broadcastSessionList();
 }
 
+/** Updates pagination delays for a session. */
 async function updateSessionDelay(payload) {
     const s = await getSession(payload.sessionId);
     if (s) {
@@ -951,7 +1090,7 @@ async function updateSessionDelay(payload) {
     }
 }
 
-// --- NEW: LIMIT UPDATE ---
+/** Updates the result target (quota) for an active session. */
 async function updateSessionLimit(payload) {
     const s = await getSession(payload.sessionId);
     if (s) {

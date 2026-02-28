@@ -1,10 +1,22 @@
-// sidepanel.js - Version 20.0 (Limit Updates)
+/**
+ * @file sidepanel.js - Version 1.0
+ * Manages the User Interface of the RAT Browser Extension.
+ * Handles user input, session creation, real-time status updates from the 
+ * background worker, and dynamic UI rendering.
+ */
 
+/** @type {Array} Stores engine configurations for the current session being created. */
 let currentConfigs = [];
+/** @type {string|null} The ID of the currently active/viewed session. */
 let currentSessionId = null;
+/** @type {Array} Cached list of tasks for the current session to enable filtering. */
 let cachedTasks = [];
+/** @type {string} Current filter applied to the task manager (ALL, OPEN, DONE, CANCELLED). */
 let currentTaskFilter = "ALL";
 
+/** * Map of supported countries and their corresponding Google domains.
+ * Used to populate the country dropdown and configure the scraper.
+ */
 const COUNTRIES = {
     "au": { name: "Australia", googleDomain: "www.google.com.au" },
     "at": { name: "Austria", googleDomain: "www.google.at" },
@@ -34,6 +46,7 @@ const COUNTRIES = {
     "us": { name: "USA", googleDomain: "www.google.com" }
 };
 
+/** List of supported languages for the search engine interface. */
 const LANGUAGES = [
     { code: "", name: "Auto / Default" },
     { code: "en", name: "English" }, { code: "de", name: "German" },
@@ -45,39 +58,82 @@ const LANGUAGES = [
     { code: "ru", name: "Russian" }, { code: "ja", name: "Japanese" }
 ];
 
-document.addEventListener('DOMContentLoaded', () => {
-    initDropdowns('confCountrySelect', 'confLangSelect', 'confEngineSelect'); 
-    initDropdowns('editConfCountrySelect', 'editConfLangSelect', null);     
+// --- INITIALIZATION ---
 
+document.addEventListener('DOMContentLoaded', () => {
+    // Populate dropdowns for both the "Create" view and the "Edit" (details) view
+    initDropdowns('confCountrySelect', 'confLangSelect', 'confEngineSelect'); 
+    initDropdowns('editConfCountrySelect', 'editConfLangSelect', 'editConfEngineSelect');
+
+    // Navigation: View switching logic
     document.getElementById('createSessionBtn').addEventListener('click', () => { resetCreateForm(); showView('createView'); });
     document.getElementById('backBtn').addEventListener('click', () => showView('listView'));
-    document.getElementById('backToListBtn').addEventListener('click', () => { currentSessionId = null; showView('listView'); chrome.runtime.sendMessage({ action: "GET_SESSIONS" }); });
+    document.getElementById('backToListBtn').addEventListener('click', () => { 
+        currentSessionId = null; 
+        showView('listView'); 
+        chrome.runtime.sendMessage({ action: "GET_SESSIONS" }); 
+    });
 
+    /** * Logic for adding a search engine configuration to the draft list.
+     */
     document.getElementById('addConfigBtn').addEventListener('click', () => {
+        const engineSelect = document.getElementById('confEngineSelect');
+        const engineId = engineSelect.value;
+        const engineName = engineSelect.options[engineSelect.selectedIndex].text;
+        
         const countryKey = document.getElementById('confCountrySelect').value;
         const langCode = document.getElementById('confLangSelect').value;
         const location = document.getElementById('confLoc').value.trim();
+        
         if (countryKey) {
             const countryData = COUNTRIES[countryKey];
             addConfig({
-                engineId: "google", engineName: "Google", countryName: countryData.name,
-                countryCode: (countryKey === "uk" ? "gb" : countryKey), domain: countryData.googleDomain,
+                engineId: engineId,
+                engineName: engineName,
+                countryName: countryData.name,
+                countryCode: (countryKey === "uk" ? "gb" : countryKey), 
+                domain: countryData.googleDomain,
                 langCode, location
             });
         }
     });
 
+    // Proxy UI toggle
     document.getElementById('useProxies').addEventListener('change', (e) => {
         document.getElementById('proxyList').disabled = !e.target.checked;
     });
 
+    /** * Collects form data and sends a message to the background script to start a session.
+     */
+
     document.getElementById('startScrapeBtn').addEventListener('click', () => {
-        const name = document.getElementById('sessName').value;
+        const name = document.getElementById('sessName').value.trim();
         const q = document.getElementById('sessQueries').value.split('\n').filter(x => x.trim());
         const useProxies = document.getElementById('useProxies').checked;
         const proxyListStr = document.getElementById('proxyList').value;
         const saveScreenshots = document.getElementById('saveScreenshots').checked;
         const saveHtml = document.getElementById('saveHtml').checked;
+        
+        const errorDiv = document.getElementById('createErrorMsg');
+        errorDiv.style.display = 'none'; // Hide the error box on every new click
+
+        // --- NEW: UI Error Validation ---
+        if (!name) {
+            errorDiv.innerText = "⚠️ Please enter a Session Name.";
+            errorDiv.style.display = 'block';
+            return;
+        }
+        if (q.length === 0) {
+            errorDiv.innerText = "⚠️ Please enter at least one Search Query.";
+            errorDiv.style.display = 'block';
+            return;
+        }
+        if (currentConfigs.length === 0) {
+            errorDiv.innerText = "⚠️ Please add at least one Search Engine configuration.";
+            errorDiv.style.display = 'block';
+            return;
+        }
+        // --------------------------------
 
         if (name && q.length > 0 && currentConfigs.length > 0) {
             chrome.runtime.sendMessage({
@@ -85,20 +141,34 @@ document.addEventListener('DOMContentLoaded', () => {
                 payload: { 
                     name, queries: q, configs: currentConfigs, 
                     resultsLimit: parseInt(document.getElementById('sessLimit').value), 
-                    delays: { min: parseInt(document.getElementById('sessMin').value) * 1000, max: parseInt(document.getElementById('sessMax').value) * 1000 },
+                    delays: { 
+                        min: parseInt(document.getElementById('sessMin').value) * 1000, 
+                        max: parseInt(document.getElementById('sessMax').value) * 1000 
+                    },
                     saveScreenshots, saveHtml, useProxies, proxyListStr
                 }
             });
+            
+            // Switch back to the dashboard after successful creation
+            showView('listView');
+            chrome.runtime.sendMessage({ action: "GET_SESSIONS" });
         }
     });
-
+    // Session Control Listeners
     document.getElementById('playPauseBtn').addEventListener('click', () => {
         const btn = document.getElementById('playPauseBtn');
         if (btn.innerText === "Pause") chrome.runtime.sendMessage({ action: "PAUSE", payload: { sessionId: currentSessionId } });
         else chrome.runtime.sendMessage({ action: "START", payload: { sessionId: currentSessionId } });
     });
 
-    document.getElementById('stopBtn').addEventListener('click', () => { if (confirm("Delete session?")) { chrome.runtime.sendMessage({ action: "DELETE_SESSION", payload: { sessionId: currentSessionId } }); showView('listView'); } });
+    document.getElementById('stopBtn').addEventListener('click', () => { 
+        if (confirm("Delete session?")) { 
+            chrome.runtime.sendMessage({ action: "DELETE_SESSION", payload: { sessionId: currentSessionId } }); 
+            showView('listView'); 
+        } 
+    });
+
+    // Data Export and Import Listeners
     document.getElementById('downloadBtn').addEventListener('click', () => chrome.runtime.sendMessage({ action: "DOWNLOAD_DATA", payload: { sessionId: currentSessionId } }));
     document.getElementById('exportAllBtn').addEventListener('click', () => chrome.runtime.sendMessage({ action: "EXPORT_SESSIONS" }));
     document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
@@ -107,21 +177,34 @@ document.addEventListener('DOMContentLoaded', () => {
         if (f.name.endsWith('.zip')) chrome.runtime.sendMessage({ action: "IMPORT_FULL_BACKUP", payload: { file: f } });
     });
     
+    // Live Setting Updates
     document.getElementById('applyDelayBtn').addEventListener('click', () => {
         const min = parseInt(document.getElementById('liveMin').value);
         const max = parseInt(document.getElementById('liveMax').value);
         if(currentSessionId && min && max) chrome.runtime.sendMessage({ action: "UPDATE_DELAY", payload: { sessionId: currentSessionId, min, max }});
     });
 
-    // NEW: LIMIT UPDATE
     document.getElementById('applyLimitBtn').addEventListener('click', () => {
         const limit = parseInt(document.getElementById('liveLimit').value);
         if(currentSessionId && limit) chrome.runtime.sendMessage({ action: "UPDATE_LIMIT", payload: { sessionId: currentSessionId, limit: limit }});
     });
 
+    // In-Session Content Modification (Adding queries/engines to a running session)
     document.getElementById('submitNewQueries').addEventListener('click', () => {
         const txt = document.getElementById('addQueryInput').value;
         const queries = txt.split('\n').filter(x => x.trim());
+        
+        const errorDiv = document.getElementById('addQueryErrorMsg');
+        errorDiv.style.display = 'none'; // Hide on each click
+
+        // --- NEW: UI Error Validation ---
+        if (queries.length === 0) {
+            errorDiv.innerText = "⚠️ Please enter at least one keyword to add.";
+            errorDiv.style.display = 'block';
+            return;
+        }
+        // --------------------------------
+
         if(queries.length > 0 && currentSessionId) {
             chrome.runtime.sendMessage({ action: "ADD_ITEMS", payload: { sessionId: currentSessionId, newQueries: queries } });
             document.getElementById('addQueryInput').value = "";
@@ -130,18 +213,35 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     document.getElementById('submitNewEngine').addEventListener('click', () => {
+        const engineSelect = document.getElementById('editConfEngineSelect');
+        const engineId = engineSelect.value;
+        const engineName = engineSelect.options[engineSelect.selectedIndex].text;
+        
         const countryKey = document.getElementById('editConfCountrySelect').value;
         const langCode = document.getElementById('editConfLangSelect').value;
         const location = document.getElementById('editConfLoc').value.trim();
         
+        const errorDiv = document.getElementById('addEngineErrorMsg');
+        errorDiv.style.display = 'none'; // Hide on each click
+
+        // --- NEW: UI Error Validation ---
+        if (!countryKey) {
+            errorDiv.innerText = "⚠️ Please select a Country to configure the search engine.";
+            errorDiv.style.display = 'block';
+            return;
+        }
+        // --------------------------------
+
         if (countryKey && currentSessionId) {
             const countryData = COUNTRIES[countryKey];
             const newConfig = {
-                engineId: "google", engineName: "Google", countryName: countryData.name,
-                countryCode: (countryKey === "uk" ? "gb" : countryKey), domain: countryData.googleDomain,
+                engineId, engineName, 
+                countryName: countryData.name,
+                countryCode: (countryKey === "uk" ? "gb" : countryKey), 
+                domain: countryData.googleDomain,
                 langCode, location
             };
-            if(confirm(`Add Google ${countryData.name} and generate tasks for ALL existing keywords?`)) {
+            if(confirm(`Add ${engineName} ${countryData.name} and generate tasks for ALL existing keywords?`)) {
                 chrome.runtime.sendMessage({ action: "ADD_ITEMS", payload: { sessionId: currentSessionId, newConfigs: [newConfig] } });
             }
         }
@@ -156,6 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Task List Interaction
     document.getElementById('refreshTasksBtn').addEventListener('click', () => {
         if(currentSessionId) {
             document.getElementById('taskListContainer').innerHTML = "<div style='padding:10px;text-align:center'>Loading...</div>";
@@ -169,6 +270,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Filter Logic
     document.querySelectorAll('.filter-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
@@ -178,8 +280,11 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
+    // Initial load
     chrome.runtime.sendMessage({ action: "GET_SESSIONS" });
 });
+
+// --- MESSAGE HANDLERS ---
 
 chrome.runtime.onMessage.addListener((msg) => {
     if (msg.type === "SESSION_LIST") renderList(msg.payload);
@@ -193,13 +298,21 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
 });
 
+// --- HELPER & RENDERING FUNCTIONS ---
+
+/**
+ * Populates Select dropdowns with country, language, and search engine data.
+ */
 function initDropdowns(cId, lId, eId) {
     const cSelect = document.getElementById(cId);
     const lSelect = document.getElementById(lId);
     
     if(eId) {
         const eSelect = document.getElementById(eId);
-        const opt = document.createElement('option'); opt.value = "google"; opt.innerText = "Google"; eSelect.appendChild(opt);
+        eSelect.innerHTML = `
+            <option value="google">Google</option>
+            <option value="bing">Bing</option>
+        `;
     }
     
     Object.keys(COUNTRIES).sort((a, b) => COUNTRIES[a].name.localeCompare(COUNTRIES[b].name)).forEach(key => { 
@@ -211,8 +324,10 @@ function initDropdowns(cId, lId, eId) {
     cSelect.value = "us"; lSelect.value = "en";
 }
 
+/** Toggles between different panel views (e.g., list view vs. create view). */
 function showView(id) { document.querySelectorAll('.view').forEach(e => e.style.display = 'none'); document.getElementById(id).style.display = 'block'; }
 
+/** Renders the list of all study sessions on the main dashboard. */
 function renderList(sessions) {
     const div = document.getElementById('sessionList');
     div.innerHTML = sessions.length ? "" : "<div style='color:#999;text-align:center;padding:10px'>No studies found.</div>";
@@ -225,6 +340,7 @@ function renderList(sessions) {
     });
 }
 
+/** Opens a specific session detail view and requests the current status from background. */
 function openSession(id) { 
     currentSessionId = id; 
     document.getElementById('logContainer').innerHTML = ""; 
@@ -232,6 +348,7 @@ function openSession(id) {
     chrome.runtime.sendMessage({ action: "GET_SESSION_STATUS", payload: { sessionId: id } }); 
 }
 
+/** Updates the detail view UI with real-time data (progress, status, logs). */
 function updateStatus(data) {
     if (data.sessionId !== currentSessionId) return;
     document.getElementById('statusTitle').innerText = data.name;
@@ -258,14 +375,14 @@ function updateStatus(data) {
         btn.innerText = "Resume / Start"; btn.classList.add("btn-success"); btn.classList.remove("btn-primary");
     }
 
+    // Render active configurations (Search Engine tags)
     if (data.originalConfigs) {
         const list = document.getElementById('activeEnginesList');
         list.innerHTML = "";
         data.originalConfigs.forEach((conf, index) => {
             const span = document.createElement('span');
             span.className = 'engine-tag';
-            
-            const text = document.createTextNode(`${conf.countryName} (${conf.langCode||'Auto'})`);
+            const text = document.createTextNode(`${conf.engineName} - ${conf.countryName} (${conf.langCode||'Auto'})`);
             span.appendChild(text);
 
             const removeBtn = document.createElement('span');
@@ -282,7 +399,6 @@ function updateStatus(data) {
                 }
             };
             span.appendChild(removeBtn);
-
             list.appendChild(span);
         });
     }
@@ -291,6 +407,7 @@ function updateStatus(data) {
         document.getElementById('totalQueriesCount').innerText = data.originalQueries.length;
     }
 
+    // Proxy and Delay UI synchronization
     const proxyArea = document.getElementById('editProxyList');
     if (document.activeElement !== proxyArea && data.settings) {
          document.getElementById('editUseProxies').checked = data.settings.useProxies;
@@ -308,19 +425,20 @@ function updateStatus(data) {
         maxInput.value = data.delays.max / 1000;
     }
 
-    // NEW: LIVE LIMIT FEEDBACK
     const limitInput = document.getElementById('liveLimit');
     if (data.globalCount && document.activeElement !== limitInput) {
         limitInput.value = data.globalCount;
     }
 }
 
+/** Toggles CSS class for setting badges based on activation status. */
 function setSettingBadge(id, isActive) {
     const el = document.getElementById(id);
     if(isActive) el.classList.add('setting-active');
     else el.classList.remove('setting-active');
 }
 
+/** Appends a single log string to the session log container. */
 function addSingleLog(entry) {
     const div = document.getElementById('logContainer');
     let color = "#333";
@@ -332,18 +450,22 @@ function addSingleLog(entry) {
     div.scrollTop = div.scrollHeight;
 }
 
+/** Adds an engine config to the current state and re-renders the creation list. */
 function addConfig(c) { currentConfigs.push(c); renderConfigs(); }
+
+/** Renders the temporary list of search engines during session creation. */
 function renderConfigs() {
     const list = document.getElementById('addedConfigsList');
     list.innerHTML = "";
     currentConfigs.forEach((c, i) => {
         const li = document.createElement('li');
-        li.innerHTML = `<span>${c.countryName} (${c.langCode || 'Auto'})</span> <span style="color:red;cursor:pointer;font-weight:bold">×</span>`;
+        li.innerHTML = `<span><strong>${c.engineName}</strong>: ${c.countryName} (${c.langCode || 'Auto'})</span> <span style="color:red;cursor:pointer;font-weight:bold">×</span>`;
         li.querySelector('span:last-child').onclick = () => { currentConfigs.splice(i, 1); renderConfigs(); };
         list.appendChild(li);
     });
 }
 
+/** Clears the "Create Session" form for fresh input. */
 function resetCreateForm() { 
     document.getElementById('sessName').value = ""; 
     document.getElementById('sessQueries').value = ""; 
@@ -356,6 +478,7 @@ function resetCreateForm() {
     renderConfigs(); 
 }
 
+/** Renders the individual task list in the task manager accordion. */
 function renderTasks() {
     const container = document.getElementById('taskListContainer');
     const countDisplay = document.getElementById('taskCountDisplay');
@@ -381,7 +504,7 @@ function renderTasks() {
         <div class="task-item">
             <div style="flex:1; overflow:hidden;">
                 <div style="font-weight:bold; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${t.term}">${t.term}</div>
-                <div style="color:#888; font-size:10px;">${t.country.toUpperCase()} - ${t.lang || 'Auto'}</div>
+                <div style="color:#888; font-size:10px;"><strong>${t.engine}</strong> | ${t.country.toUpperCase()} - ${t.lang || 'Auto'}</div>
             </div>
             <div style="display:flex; align-items:center; gap:8px;">
                 <span class="status-badge ${statusClass}">${t.status}</span>
@@ -393,6 +516,7 @@ function renderTasks() {
     container.innerHTML = html;
 }
 
+/** Global hook to delete/cancel a specific task via its index. */
 window.deleteTask = function(index) {
     if(!currentSessionId) return;
     
